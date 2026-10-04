@@ -1,0 +1,26 @@
+services:
+  bot:
+    build: .
+    image: livestreambot:latest
+    container_name: livestreambot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bot-data:/data
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  bot-data:
