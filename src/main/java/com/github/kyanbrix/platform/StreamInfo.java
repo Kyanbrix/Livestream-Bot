@@ -14,6 +14,7 @@ public record StreamInfo(
         int viewers,
         String thumbnailUrl,
         String avatarUrl,
+        String gameImageUrl,
         Instant startedAt
 ) {
     public String url() {

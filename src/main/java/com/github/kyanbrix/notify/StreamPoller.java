@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -153,19 +154,29 @@ public class StreamPoller implements AutoCloseable {
         Long pingRole = settings.pingRoleId() != null && guild.getRoleById(settings.pingRoleId()) != null
                 ? settings.pingRoleId()
                 : null;
-        Message message = channel.sendMessage(EmbedFactory.liveMessage(stream, pingRole)).complete();
+        List<String> games = stream.game().isBlank() ? List.of() : List.of(stream.game());
+        Message message = channel.sendMessage(EmbedFactory.liveMessage(stream, pingRole, games)).complete();
         db.saveLiveState(new LiveState(guildId, stream.platform(), stream.username(),
-                channel.getIdLong(), message.getIdLong(), stream.startedAt()));
+                channel.getIdLong(), message.getIdLong(), stream.startedAt(), games));
         log.info("Announced {} {} in {}", stream.platform(), stream.username(), guild.getName());
     }
 
-    private void refresh(LiveState state, StreamInfo stream) {
+    private void refresh(LiveState state, StreamInfo stream) throws Exception {
+        List<String> games = state.games();
+        if (!stream.game().isBlank() && (games.isEmpty() || !games.getLast().equals(stream.game()))) {
+            games = new ArrayList<>(games);
+            games.add(stream.game());
+            db.saveLiveState(new LiveState(state.guildId(), state.platform(), state.username(),
+                    state.channelId(), state.messageId(), state.startedAt(), games));
+            log.info("{} {} switched to {}", stream.platform(), stream.username(), stream.game());
+        }
+
         GuildMessageChannel channel = channel(state.guildId(), state.channelId());
         if (channel == null) {
             return;
         }
         try {
-            channel.editMessageById(state.messageId(), EmbedFactory.liveUpdate(stream)).complete();
+            channel.editMessageById(state.messageId(), EmbedFactory.liveUpdate(stream, games)).complete();
         } catch (ErrorResponseException e) {
             // The announcement was deleted by a moderator; keep the state so we don't repost it.
             if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
@@ -182,7 +193,7 @@ public class StreamPoller implements AutoCloseable {
         }
         try {
             Message original = channel.retrieveMessageById(state.messageId()).complete();
-            original.editMessage(EmbedFactory.endedUpdate(original, state.startedAt())).complete();
+            original.editMessage(EmbedFactory.endedUpdate(original, state.startedAt(), state.games())).complete();
             log.info("Marked {} {} as ended in guild {}", state.platform(), state.username(), state.guildId());
         } catch (ErrorResponseException e) {
             if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {

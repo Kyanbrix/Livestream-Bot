@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Kick public API: https://docs.kick.com
@@ -51,7 +52,12 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
                 String slug = c.path("slug").asText().toLowerCase();
                 JsonNode stream = c.path("stream");
                 JsonNode user = users.get(c.path("broadcaster_user_id").asText());
-                String thumbnail = stream.path("thumbnail").asText(null);
+                String categoryImage = blankToNull(c.path("category").path("thumbnail").asText(null));
+                // Prefer the live preview (upgraded to 720p); before Kick has one, fall back to the channel banner.
+                String thumbnail = blankToNull(stream.path("thumbnail").asText(null));
+                thumbnail = thumbnail != null
+                        ? thumbnail.replaceFirst("/480\\.webp$", "/720.webp") + "?t=" + cacheBuster
+                        : Objects.requireNonNullElse(blankToNull(c.path("banner_picture").asText(null)), categoryImage);
                 result.put(slug, new StreamInfo(
                         Platform.KICK,
                         slug,
@@ -59,8 +65,9 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
                         c.path("stream_title").asText(""),
                         c.path("category").path("name").asText(""),
                         stream.path("viewer_count").asInt(),
-                        thumbnail == null || thumbnail.isBlank() ? null : thumbnail + "?t=" + cacheBuster,
+                        thumbnail,
                         user != null ? user.path("profile_picture").asText(null) : null,
+                        categoryImage,
                         parseInstant(stream.path("start_time").asText(null))
                 ));
             }
@@ -71,6 +78,10 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
     @Override
     public boolean exists(String username) throws IOException, InterruptedException {
         return !getJson(API + "/channels?slug=" + encode(username)).path("data").isEmpty();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private Map<String, JsonNode> fetchUsers(List<String> userIds) throws IOException, InterruptedException {

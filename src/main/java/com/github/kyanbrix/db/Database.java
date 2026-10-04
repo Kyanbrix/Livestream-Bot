@@ -21,7 +21,11 @@ public class Database implements AutoCloseable {
     public record TrackedStreamer(long guildId, Platform platform, String username) {
     }
 
-    public record LiveState(long guildId, Platform platform, String username, long channelId, long messageId, Instant startedAt) {
+    /**
+     * @param games every game/category played during the stream, oldest first; the last entry is current
+     */
+    public record LiveState(long guildId, Platform platform, String username, long channelId, long messageId,
+                            Instant startedAt, List<String> games) {
     }
 
     private final Connection connection;
@@ -50,8 +54,25 @@ public class Database implements AutoCloseable {
                         channel_id INTEGER NOT NULL,
                         message_id INTEGER NOT NULL,
                         started_at INTEGER,
+                        games      TEXT,
                         PRIMARY KEY (guild_id, platform, username)
                     )""");
+            migrate(st);
+        }
+    }
+
+    /**
+     * Upgrades databases created by older versions of the bot.
+     */
+    private static void migrate(Statement st) throws SQLException {
+        boolean hasGames = false;
+        try (ResultSet rs = st.executeQuery("PRAGMA table_info(live_state)")) {
+            while (rs.next()) {
+                hasGames |= "games".equals(rs.getString("name"));
+            }
+        }
+        if (!hasGames) {
+            st.execute("ALTER TABLE live_state ADD COLUMN games TEXT");
         }
     }
 
@@ -149,7 +170,7 @@ public class Database implements AutoCloseable {
 
     public synchronized Optional<LiveState> getLiveState(long guildId, Platform platform, String username) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("""
-                SELECT channel_id, message_id, started_at FROM live_state
+                SELECT channel_id, message_id, started_at, games FROM live_state
                 WHERE guild_id = ? AND platform = ? AND username = ?""")) {
             ps.setLong(1, guildId);
             ps.setString(2, platform.name());
@@ -159,22 +180,25 @@ public class Database implements AutoCloseable {
                     return Optional.empty();
                 }
                 Long started = nullableLong(rs, 3);
+                String games = rs.getString(4);
                 return Optional.of(new LiveState(guildId, platform, username, rs.getLong(1), rs.getLong(2),
-                        started == null ? null : Instant.ofEpochSecond(started)));
+                        started == null ? null : Instant.ofEpochSecond(started),
+                        games == null || games.isEmpty() ? List.of() : List.of(games.split("\n"))));
             }
         }
     }
 
     public synchronized void saveLiveState(LiveState state) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("""
-                INSERT OR REPLACE INTO live_state (guild_id, platform, username, channel_id, message_id, started_at)
-                VALUES (?, ?, ?, ?, ?, ?)""")) {
+                INSERT OR REPLACE INTO live_state (guild_id, platform, username, channel_id, message_id, started_at, games)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""")) {
             ps.setLong(1, state.guildId());
             ps.setString(2, state.platform().name());
             ps.setString(3, state.username());
             ps.setLong(4, state.channelId());
             ps.setLong(5, state.messageId());
             ps.setObject(6, state.startedAt() == null ? null : state.startedAt().getEpochSecond());
+            ps.setString(7, String.join("\n", state.games()));
             ps.executeUpdate();
         }
     }

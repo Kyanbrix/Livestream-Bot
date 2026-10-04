@@ -7,6 +7,7 @@ import com.github.kyanbrix.notify.EmbedFactory;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
 import com.github.kyanbrix.platform.StreamProvider;
+import com.github.kyanbrix.platform.TwitchProvider;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Role;
@@ -212,8 +213,9 @@ public class CommandListener extends ListenerAdapter {
         String selfName = guild.getSelfMember().getEffectiveName();
         StreamInfo sample = new StreamInfo(Platform.TWITCH, "twitch", selfName,
                 "This is a test notification", "Just Chatting", 1234,
-                null, guild.getSelfMember().getEffectiveAvatarUrl(), Instant.now());
-        channel.sendMessage(EmbedFactory.liveMessage(sample, settings.pingRoleId())).complete();
+                TwitchProvider.PREVIEW_PLACEHOLDER, guild.getSelfMember().getEffectiveAvatarUrl(),
+                "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg", Instant.now());
+        channel.sendMessage(EmbedFactory.liveMessage(sample, settings.pingRoleId(), List.of(sample.game()))).complete();
         return "Sent a test notification to " + channel.getAsMention() + ".";
     }
 

@@ -16,6 +16,7 @@ import java.awt.Color;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 
 public final class EmbedFactory {
 
@@ -27,9 +28,9 @@ public final class EmbedFactory {
     /**
      * The go-live announcement, optionally pinging a role.
      */
-    public static MessageCreateData liveMessage(StreamInfo stream, Long pingRoleId) {
+    public static MessageCreateData liveMessage(StreamInfo stream, Long pingRoleId, List<String> games) {
         MessageCreateBuilder builder = new MessageCreateBuilder()
-                .setEmbeds(liveEmbed(stream))
+                .setEmbeds(liveEmbed(stream, games))
                 .setComponents(ActionRow.of(watchButton(stream)))
                 .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class));
         if (pingRoleId != null) {
@@ -43,11 +44,11 @@ public final class EmbedFactory {
     }
 
     /**
-     * Refreshes viewer count, title and category on an existing announcement. Edits never re-ping.
+     * Refreshes viewer count, title and game on an existing announcement. Edits never re-ping.
      */
-    public static MessageEditData liveUpdate(StreamInfo stream) {
+    public static MessageEditData liveUpdate(StreamInfo stream, List<String> games) {
         return new MessageEditBuilder()
-                .setEmbeds(liveEmbed(stream))
+                .setEmbeds(liveEmbed(stream, games))
                 .setComponents(ActionRow.of(watchButton(stream)))
                 .build();
     }
@@ -55,7 +56,7 @@ public final class EmbedFactory {
     /**
      * Turns the announcement into an "ended" notice, keeping the last known title and category.
      */
-    public static MessageEditData endedUpdate(Message original, Instant startedAt) {
+    public static MessageEditData endedUpdate(Message original, Instant startedAt, List<String> games) {
         EmbedBuilder embed = original.getEmbeds().isEmpty()
                 ? new EmbedBuilder()
                 : new EmbedBuilder(original.getEmbeds().getFirst());
@@ -73,6 +74,9 @@ public final class EmbedFactory {
                         ? "Stream ended after **" + formatDuration(Duration.between(startedAt, Instant.now())) + "**."
                         : "Stream ended.")
                 .setTimestamp(Instant.now());
+        if (!games.isEmpty()) {
+            embed.addField("Played", gameHistory(games), false);
+        }
 
         String content = original.getContentRaw().replaceFirst("^<@&\\d+> ", "").replace(" is live on ", " was live on ");
         return new MessageEditBuilder()
@@ -81,7 +85,10 @@ public final class EmbedFactory {
                 .build();
     }
 
-    private static MessageEmbed liveEmbed(StreamInfo stream) {
+    /**
+     * @param games game history for this stream, oldest first; everything before the current game is listed as "Previously"
+     */
+    private static MessageEmbed liveEmbed(StreamInfo stream, List<String> games) {
         EmbedBuilder embed = new EmbedBuilder()
                 .setColor(stream.platform().getColor())
                 .setAuthor(stream.displayName() + " is now live!", stream.url(), stream.avatarUrl())
@@ -90,14 +97,28 @@ public final class EmbedFactory {
                         stream.game().isBlank() ? "—" : stream.game(), true)
                 .addField("Viewers", String.format("%,d", stream.viewers()), true)
                 .setImage(stream.thumbnailUrl())
-                .setThumbnail(stream.avatarUrl())
+                .setThumbnail(stream.gameImageUrl())
                 .setFooter(stream.platform().getDisplayName())
                 .setTimestamp(stream.startedAt());
+        if (games.size() > 1) {
+            embed.addField("Previously", gameHistory(games.subList(0, games.size() - 1)), false);
+        }
         return embed.build();
     }
 
     private static Button watchButton(StreamInfo stream) {
         return Button.link(stream.url(), "Watch on " + stream.platform().getDisplayName());
+    }
+
+    /**
+     * Joins games as "A → B → C", dropping the oldest ones if it would exceed the embed field limit.
+     */
+    private static String gameHistory(List<String> games) {
+        String joined = String.join(" → ", games);
+        for (int start = 1; joined.length() > MessageEmbed.VALUE_MAX_LENGTH && start < games.size(); start++) {
+            joined = "… → " + String.join(" → ", games.subList(start, games.size()));
+        }
+        return truncate(joined, MessageEmbed.VALUE_MAX_LENGTH);
     }
 
     private static String formatDuration(Duration duration) {
