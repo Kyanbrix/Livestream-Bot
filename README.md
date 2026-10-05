@@ -38,8 +38,8 @@ You need the **Manage Server** permission to use these commands.
 
 | Command | Description |
 |---------|-------------|
-| `/stream add <platform> <username> [channel] [role] [videos] [shorts]` | Start tracking a streamer. `channel` and `role` set where this streamer posts and who it pings (otherwise the server defaults are used). YouTube takes an `@handle`, channel URL or channel ID, and also announces new videos and Shorts unless you set `videos:false` or `shorts:false` |
-| `/stream edit <platform> <username> [channel] [role] [videos] [shorts] [reset]` | Change a tracked streamer's channel, role or YouTube options. `reset` goes back to the server defaults |
+| `/stream add <platform> <username> [channel] [role] [no-ping] [videos] [shorts]` | Start tracking a streamer. `channel` and `role` set where this streamer posts and who it pings (otherwise the server defaults are used). `no-ping:true` posts without pinging anyone, even if the server has a default role. YouTube takes an `@handle`, channel URL or channel ID, and also announces new videos and Shorts unless you set `videos:false` or `shorts:false` |
+| `/stream edit <platform> <username> [channel] [role] [no-ping] [videos] [shorts] [reset]` | Change a tracked streamer's channel, role or YouTube options. `no-ping:true` turns its pings off and `no-ping:false` goes back to the default role. `reset` goes back to the server defaults |
 | `/stream remove <platform> <username>` | Stop tracking a streamer |
 | `/stream list` | Show tracked streamers, their channels and roles, and the server defaults |
 | `/stream channel <channel>` | Default channel for streamers without their own |

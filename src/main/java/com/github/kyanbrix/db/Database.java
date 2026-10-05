@@ -28,10 +28,19 @@ public class Database implements AutoCloseable {
      * @param notifyVideos YouTube only: announce new videos
      * @param notifyShorts YouTube only: announce new Shorts
      * @param channelId    where this streamer's posts go, or null for the server's default channel
-     * @param pingRoleId   role this streamer's posts ping, or null for the server's default role
+     * @param pingRoleId   role this streamer's posts ping, null for the server's default role,
+     *                     or {@link #NO_PING} to never ping for this streamer
      */
     public record TrackedStreamer(long guildId, Platform platform, String username, String displayName,
                                   boolean notifyVideos, boolean notifyShorts, Long channelId, Long pingRoleId) {
+
+        /** Stored in {@code ping_role_id} to turn pings off for one streamer; Discord IDs are never 0. */
+        public static final long NO_PING = 0L;
+
+        public boolean pingDisabled() {
+            return pingRoleId != null && pingRoleId == NO_PING;
+        }
+
         public String name() {
             return displayName != null ? displayName : username;
         }
@@ -157,7 +166,8 @@ public class Database implements AutoCloseable {
      */
     /**
      * @param channelId  notification channel for this streamer, or null to use the server default
-     * @param pingRoleId role to ping for this streamer, or null to use the server default
+     * @param pingRoleId role to ping for this streamer, null to use the server default, or
+     *                   {@link TrackedStreamer#NO_PING} for no ping
      */
     public synchronized boolean addStreamer(long guildId, Platform platform, Channel channel, boolean notifyVideos,
                                             boolean notifyShorts, Long channelId, Long pingRoleId) throws SQLException {

@@ -38,7 +38,7 @@ public record PostTarget(GuildMessageChannel channel, Long pingRoleId) {
         }
         // A deleted role would render as "@deleted-role": fall back to the server role, then to no ping.
         Long pingRole = null;
-        for (Long roleId : new Long[]{streamer.pingRoleId(), settings.pingRoleId()}) {
+        for (Long roleId : streamer.pingDisabled() ? new Long[0] : new Long[]{streamer.pingRoleId(), settings.pingRoleId()}) {
             if (roleId != null && guild.getRoleById(roleId) != null) {
                 pingRole = roleId;
                 break;
@@ -51,7 +51,13 @@ public record PostTarget(GuildMessageChannel channel, Long pingRoleId) {
         return streamer.channelId() != null ? streamer.channelId() : settings.channelId();
     }
 
+    /**
+     * @return the role to ping, or null for no ping
+     */
     public static Long effectiveRoleId(GuildSettings settings, TrackedStreamer streamer) {
+        if (streamer.pingDisabled()) {
+            return null;
+        }
         return streamer.pingRoleId() != null ? streamer.pingRoleId() : settings.pingRoleId();
     }
 }
