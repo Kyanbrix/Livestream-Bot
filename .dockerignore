@@ -5,3 +5,4 @@ target/
 *.db
 .env
 README.md
+CLAUDE.md

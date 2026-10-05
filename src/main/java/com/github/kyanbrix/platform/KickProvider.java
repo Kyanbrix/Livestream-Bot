@@ -4,12 +4,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Kick public API: https://docs.kick.com
@@ -18,6 +22,8 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
 
     private static final String API = "https://api.kick.com/public/v1";
     private static final int BATCH_SIZE = 50;
+    private static final DateTimeFormatter VOD_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final String BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
 
     public KickProvider(String clientId, String clientSecret) {
         super("https://id.kick.com/oauth/token", clientId, clientSecret);
@@ -73,6 +79,30 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
             }
         }
         return result;
+    }
+
+    /**
+     * Kick's public API has no VOD endpoint, so this uses the website's own (unofficial) one.
+     * It can change or be blocked at any time, so any failure just means "no VOD".
+     */
+    @Override
+    public Optional<Vod> findVod(String username, Instant startedAt) {
+        try {
+            JsonNode videos = getPublicJson("https://kick.com/api/v2/channels/" + encode(username) + "/videos", BROWSER_UA);
+            for (JsonNode v : videos) {
+                Instant start = LocalDateTime.parse(v.path("start_time").asText(), VOD_TIME).toInstant(ZoneOffset.UTC);
+                String uuid = v.path("video").path("uuid").asText("");
+                if (!uuid.isEmpty() && !v.path("is_live").asBoolean(false) && StreamProvider.sameBroadcast(start, startedAt)) {
+                    return Optional.of(new Vod("https://kick.com/" + username + "/videos/" + uuid,
+                            blankToNull(v.path("thumbnail").path("src").asText(null))));
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            // best-effort, see above
+        }
+        return Optional.empty();
     }
 
     @Override

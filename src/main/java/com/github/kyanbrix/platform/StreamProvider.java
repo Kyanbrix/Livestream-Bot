@@ -1,10 +1,16 @@
 package com.github.kyanbrix.platform;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Optional;
 
 public interface StreamProvider {
+
+    /** How far a recording's start time may differ from the stream's to count as its VOD. */
+    Duration VOD_MATCH_WINDOW = Duration.ofMinutes(10);
 
     Platform platform();
 
@@ -21,4 +27,15 @@ public interface StreamProvider {
      * @return true if a channel with this username/slug exists on the platform
      */
     boolean exists(String username) throws IOException, InterruptedException;
+
+    /**
+     * Looks up the recording of a stream that started at {@code startedAt}.
+     *
+     * @return empty if the streamer doesn't keep VODs or it isn't available yet
+     */
+    Optional<Vod> findVod(String username, Instant startedAt) throws IOException, InterruptedException;
+
+    static boolean sameBroadcast(Instant a, Instant b) {
+        return a != null && b != null && Duration.between(a, b).abs().compareTo(VOD_MATCH_WINDOW) <= 0;
+    }
 }

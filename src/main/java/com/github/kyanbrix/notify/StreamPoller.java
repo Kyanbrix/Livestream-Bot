@@ -7,6 +7,7 @@ import com.github.kyanbrix.db.Database.TrackedStreamer;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
 import com.github.kyanbrix.platform.StreamProvider;
+import com.github.kyanbrix.platform.Vod;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
@@ -40,6 +41,9 @@ public class StreamPoller implements AutoCloseable {
 
     /** A stream whose start time moved by more than this is treated as a new broadcast. */
     private static final Duration RESTART_THRESHOLD = Duration.ofMinutes(2);
+
+    /** When to look for a VOD again if none existed when the stream ended (relative to the previous try). */
+    private static final Duration[] VOD_RETRY_DELAYS = {Duration.ofMinutes(2), Duration.ofMinutes(3), Duration.ofMinutes(10)};
 
     private final JDA jda;
     private final Database db;
@@ -191,15 +195,68 @@ public class StreamPoller implements AutoCloseable {
         if (channel == null) {
             return;
         }
+        Vod vod = findVod(state).orElse(null);
         try {
             Message original = channel.retrieveMessageById(state.messageId()).complete();
-            original.editMessage(EmbedFactory.endedUpdate(original, state.startedAt(), state.games())).complete();
+            original.editMessage(EmbedFactory.endedUpdate(original, state.startedAt(), state.games(), vod)).complete();
             log.info("Marked {} {} as ended in guild {}", state.platform(), state.username(), state.guildId());
         } catch (ErrorResponseException e) {
             if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
                 throw e;
             }
+            return;
         }
+        if (vod == null) {
+            scheduleVodRetry(state, 0);
+        }
+    }
+
+    /**
+     * Recordings often show up a few minutes after a stream ends, so look again later.
+     * Retries live in memory only; after a restart the post just keeps its channel button.
+     */
+    private void scheduleVodRetry(LiveState state, int attempt) {
+        if (attempt >= VOD_RETRY_DELAYS.length) {
+            return;
+        }
+        scheduler.schedule(() -> {
+            try {
+                Optional<Vod> vod = findVod(state);
+                if (vod.isEmpty()) {
+                    scheduleVodRetry(state, attempt + 1);
+                    return;
+                }
+                GuildMessageChannel channel = channel(state.guildId(), state.channelId());
+                if (channel == null) {
+                    return;
+                }
+                Message original = channel.retrieveMessageById(state.messageId()).complete();
+                original.editMessage(EmbedFactory.vodUpdate(original, vod.get())).complete();
+                log.info("Added VOD for {} {} in guild {}", state.platform(), state.username(), state.guildId());
+            } catch (ErrorResponseException e) {
+                // UNKNOWN_MESSAGE: the post was deleted, nothing to update
+                if (e.getErrorResponse() != ErrorResponse.UNKNOWN_MESSAGE) {
+                    log.warn("Failed to add VOD for {} {}: {}", state.platform(), state.username(), e.getMessage());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to add VOD for {} {}: {}", state.platform(), state.username(), e.getMessage());
+            }
+        }, VOD_RETRY_DELAYS[attempt].toSeconds(), TimeUnit.SECONDS);
+    }
+
+    private Optional<Vod> findVod(LiveState state) {
+        StreamProvider provider = providers.get(state.platform());
+        if (provider == null || state.startedAt() == null) {
+            return Optional.empty();
+        }
+        try {
+            return provider.findVod(state.username(), state.startedAt());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.debug("VOD lookup for {} {} failed: {}", state.platform(), state.username(), e.getMessage());
+        }
+        return Optional.empty();
     }
 
     private GuildMessageChannel channel(long guildId, long channelId) {

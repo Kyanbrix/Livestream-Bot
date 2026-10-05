@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Twitch Helix API: https://dev.twitch.tv/docs/api/reference
@@ -81,6 +82,24 @@ public class TwitchProvider extends AppTokenClient implements StreamProvider {
             }
         }
         return result;
+    }
+
+    @Override
+    public Optional<Vod> findVod(String username, Instant startedAt) throws IOException, InterruptedException {
+        JsonNode user = getJson(API + "/users?login=" + encode(username)).path("data").path(0);
+        if (user.isMissingNode()) {
+            return Optional.empty();
+        }
+        JsonNode videos = getJson(API + "/videos?user_id=" + encode(user.path("id").asText()) + "&type=archive&first=5").path("data");
+        for (JsonNode v : videos) {
+            if (StreamProvider.sameBroadcast(parseInstant(v.path("created_at").asText(null)), startedAt)) {
+                String thumbnail = v.path("thumbnail_url").asText("");
+                // Blank while Twitch is still processing the recording.
+                return Optional.of(new Vod(v.path("url").asText(),
+                        thumbnail.isBlank() ? null : thumbnail.replace("%{width}", "1280").replace("%{height}", "720")));
+            }
+        }
+        return Optional.empty();
     }
 
     @Override

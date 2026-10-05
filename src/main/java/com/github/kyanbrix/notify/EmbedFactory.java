@@ -2,11 +2,13 @@ package com.github.kyanbrix.notify;
 
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
+import com.github.kyanbrix.platform.Vod;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.components.actionrow.ActionRow;
 import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
+import net.dv8tion.jda.api.utils.TimeFormat;
 import net.dv8tion.jda.api.utils.messages.MessageCreateBuilder;
 import net.dv8tion.jda.api.utils.messages.MessageCreateData;
 import net.dv8tion.jda.api.utils.messages.MessageEditBuilder;
@@ -54,9 +56,11 @@ public final class EmbedFactory {
     }
 
     /**
-     * Turns the announcement into an "ended" notice, keeping the last known title and category.
+     * Turns the announcement into an "ended" notice, keeping the last known title, category and image.
+     *
+     * @param vod the stream's recording, or null to keep the channel button
      */
-    public static MessageEditData endedUpdate(Message original, Instant startedAt, List<String> games) {
+    public static MessageEditData endedUpdate(Message original, Instant startedAt, List<String> games, Vod vod) {
         EmbedBuilder embed = original.getEmbeds().isEmpty()
                 ? new EmbedBuilder()
                 : new EmbedBuilder(original.getEmbeds().getFirst());
@@ -66,23 +70,43 @@ public final class EmbedFactory {
                 ? author.getName().replace(" is now live!", "")
                 : "The stream";
 
+        Instant endedAt = Instant.now();
+        String description = "Stream ended " + TimeFormat.RELATIVE.format(endedAt);
+        if (startedAt != null) {
+            description += " · lasted **" + formatDuration(Duration.between(startedAt, endedAt)) + "**";
+        }
         embed.setColor(ENDED_COLOR)
                 .setAuthor(name + " was live", author != null ? author.getUrl() : null, author != null ? author.getIconUrl() : null)
-                .setImage(null)
                 .clearFields()
-                .setDescription(startedAt != null
-                        ? "Stream ended after **" + formatDuration(Duration.between(startedAt, Instant.now())) + "**."
-                        : "Stream ended.")
-                .setTimestamp(Instant.now());
+                .setDescription(description)
+                .setTimestamp(endedAt);
+        if (vod != null && vod.thumbnailUrl() != null) {
+            // The live preview goes stale once a stream ends; the VOD's own thumbnail doesn't.
+            embed.setImage(vod.thumbnailUrl());
+        }
         if (!games.isEmpty()) {
             embed.addField("Played", gameHistory(games), false);
         }
 
         String content = original.getContentRaw().replaceFirst("^<@&\\d+> ", "").replace(" is live on ", " was live on ");
-        return new MessageEditBuilder()
+        MessageEditBuilder builder = new MessageEditBuilder()
                 .setContent(content)
-                .setEmbeds(embed.build())
-                .build();
+                .setEmbeds(embed.build());
+        if (vod != null) {
+            builder.setComponents(ActionRow.of(vodButton(vod)));
+        }
+        return builder.build();
+    }
+
+    /**
+     * Adds a recording that became available after the stream was already marked as ended.
+     */
+    public static MessageEditData vodUpdate(Message original, Vod vod) {
+        MessageEditBuilder builder = new MessageEditBuilder().setComponents(ActionRow.of(vodButton(vod)));
+        if (vod.thumbnailUrl() != null && !original.getEmbeds().isEmpty()) {
+            builder.setEmbeds(new EmbedBuilder(original.getEmbeds().getFirst()).setImage(vod.thumbnailUrl()).build());
+        }
+        return builder.build();
     }
 
     /**
@@ -93,6 +117,8 @@ public final class EmbedFactory {
                 .setColor(stream.platform().getColor())
                 .setAuthor(stream.displayName() + " is now live!", stream.url(), stream.avatarUrl())
                 .setTitle(truncate(stream.title().isBlank() ? stream.url() : stream.title(), MessageEmbed.TITLE_MAX_LENGTH), stream.url())
+                // Rendered by Discord as e.g. "2 hours ago" and kept current client-side.
+                .setDescription(stream.startedAt() != null ? "🔴 Live since " + TimeFormat.RELATIVE.format(stream.startedAt()) : null)
                 .addField(stream.platform() == Platform.KICK ? "Category" : "Game",
                         stream.game().isBlank() ? "—" : stream.game(), true)
                 .addField("Viewers", String.format("%,d", stream.viewers()), true)
@@ -119,6 +145,10 @@ public final class EmbedFactory {
             joined = "… → " + String.join(" → ", games.subList(start, games.size()));
         }
         return truncate(joined, MessageEmbed.VALUE_MAX_LENGTH);
+    }
+
+    private static Button vodButton(Vod vod) {
+        return Button.link(vod.url(), "Watch VOD");
     }
 
     private static String formatDuration(Duration duration) {

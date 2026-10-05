@@ -40,3 +40,4 @@ build/
 ### Bot ###
 *.db
 .env
+CLAUDE.md

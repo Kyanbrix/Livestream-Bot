@@ -60,6 +60,23 @@ public abstract class AppTokenClient {
         return MAPPER.readTree(response.body());
     }
 
+    /**
+     * GET without the app token, for public website endpoints.
+     */
+    protected JsonNode getPublicJson(String url, String userAgent) throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(15))
+                .header("Accept", "application/json")
+                .header("User-Agent", userAgent)
+                .GET()
+                .build();
+        HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new IOException("GET " + url + " returned HTTP " + response.statusCode());
+        }
+        return MAPPER.readTree(response.body());
+    }
+
     private HttpResponse<String> send(String url) throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(15))
