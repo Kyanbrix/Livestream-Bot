@@ -135,10 +135,10 @@ public class StreamPoller implements AutoCloseable {
         }
 
         if (state.isEmpty()) {
-            announce(s.guildId(), settings, stream);
+            announce(s, settings, stream);
         } else if (isNewBroadcast(state.get(), stream)) {
             end(state.get());
-            announce(s.guildId(), settings, stream);
+            announce(s, settings, stream);
         } else {
             refresh(state.get(), stream);
         }
@@ -149,14 +149,14 @@ public class StreamPoller implements AutoCloseable {
                 && stream.startedAt().isAfter(state.startedAt().plus(RESTART_THRESHOLD));
     }
 
-    private void announce(long guildId, GuildSettings settings, StreamInfo stream) throws Exception {
-        PostTarget target = PostTarget.of(jda, settings);
+    private void announce(TrackedStreamer streamer, GuildSettings settings, StreamInfo stream) throws Exception {
+        PostTarget target = PostTarget.of(jda, settings, streamer);
         if (target == null) {
             return;
         }
         List<String> games = stream.game().isBlank() ? List.of() : List.of(stream.game());
         Message message = target.channel().sendMessage(EmbedFactory.liveMessage(stream, target.pingRoleId(), games)).complete();
-        db.saveLiveState(new LiveState(guildId, stream.platform(), stream.username(),
+        db.saveLiveState(new LiveState(streamer.guildId(), stream.platform(), stream.username(),
                 target.channel().getIdLong(), message.getIdLong(), stream.startedAt(), games));
         log.info("Announced {} {} in {}", stream.platform(), stream.username(), target.channel().getGuild().getName());
     }

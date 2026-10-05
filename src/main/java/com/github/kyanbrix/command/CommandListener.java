@@ -4,6 +4,7 @@ import com.github.kyanbrix.db.Database;
 import com.github.kyanbrix.db.Database.GuildSettings;
 import com.github.kyanbrix.db.Database.TrackedStreamer;
 import com.github.kyanbrix.notify.EmbedFactory;
+import com.github.kyanbrix.notify.PostTarget;
 import com.github.kyanbrix.platform.Channel;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 
 public class CommandListener extends ListenerAdapter {
@@ -57,6 +59,7 @@ public class CommandListener extends ListenerAdapter {
                 .addChoice("Twitch", "twitch")
                 .addChoice("Kick", "kick")
                 .addChoice("YouTube", "youtube");
+        OptionData trackedUsername = new OptionData(OptionType.STRING, "username", "Tracked channel name", true, true);
 
         return Commands.slash("stream", "Manage live stream notifications")
                 .setContexts(InteractionContextType.GUILD)
@@ -66,18 +69,38 @@ public class CommandListener extends ListenerAdapter {
                                 .addOptions(platform,
                                         new OptionData(OptionType.STRING, "username", "Channel name, @handle or channel URL", true),
                                         new OptionData(OptionType.BOOLEAN, "videos", "YouTube: announce new videos (default: yes)", false),
-                                        new OptionData(OptionType.BOOLEAN, "shorts", "YouTube: announce new Shorts (default: yes)", false)),
+                                        new OptionData(OptionType.BOOLEAN, "shorts", "YouTube: announce new Shorts (default: yes)", false),
+                                        streamerChannelOption(),
+                                        new OptionData(OptionType.ROLE, "role", "Role to ping for this streamer (default: /stream role)", false)),
+                        new SubcommandData("edit", "Change where a tracked streamer posts, who it pings, or what it announces")
+                                .addOptions(platform, trackedUsername,
+                                        streamerChannelOption(),
+                                        new OptionData(OptionType.ROLE, "role", "Role to ping for this streamer", false),
+                                        new OptionData(OptionType.BOOLEAN, "videos", "YouTube: announce new videos", false),
+                                        new OptionData(OptionType.BOOLEAN, "shorts", "YouTube: announce new Shorts", false),
+                                        new OptionData(OptionType.STRING, "reset", "Go back to the server defaults", false)
+                                                .addChoice("Channel", "channel")
+                                                .addChoice("Role", "role")
+                                                .addChoice("Channel and role", "both")),
                         new SubcommandData("remove", "Stop tracking a streamer")
-                                .addOptions(platform,
-                                        new OptionData(OptionType.STRING, "username", "Tracked channel name", true, true)),
+                                .addOptions(platform, trackedUsername),
                         new SubcommandData("list", "Show tracked streamers and settings"),
-                        new SubcommandData("channel", "Set the channel where notifications are posted")
+                        new SubcommandData("channel", "Set the default channel for streamers without their own")
                                 .addOptions(new OptionData(OptionType.CHANNEL, "channel", "Notification channel", true)
                                         .setChannelTypes(ChannelType.TEXT, ChannelType.NEWS)),
-                        new SubcommandData("role", "Set a role to ping (leave empty to disable pings)")
+                        new SubcommandData("role", "Set the default role to ping (leave empty to disable pings)")
                                 .addOption(OptionType.ROLE, "role", "Role to mention", false),
                         new SubcommandData("test", "Post a sample notification to check your setup")
+                                .addOptions(
+                                        new OptionData(OptionType.STRING, "platform", "Test a specific streamer's channel and role", false)
+                                                .addChoices(platform.getChoices()),
+                                        new OptionData(OptionType.STRING, "username", "Tracked channel name", false, true))
                 );
+    }
+
+    private static OptionData streamerChannelOption() {
+        return new OptionData(OptionType.CHANNEL, "channel", "Channel for this streamer's posts (default: /stream channel)", false)
+                .setChannelTypes(ChannelType.TEXT, ChannelType.NEWS);
     }
 
     @Override
@@ -95,12 +118,19 @@ public class CommandListener extends ListenerAdapter {
                 String reply = switch (sub) {
                     case "add" -> add(guild, platformOption(event), usernameOption(event),
                             event.getOption("videos", true, OptionMapping::getAsBoolean),
-                            event.getOption("shorts", true, OptionMapping::getAsBoolean));
+                            event.getOption("shorts", true, OptionMapping::getAsBoolean),
+                            channelOption(event), event.getOption("role", OptionMapping::getAsRole));
+                    case "edit" -> edit(guild, platformOption(event), usernameOption(event),
+                            channelOption(event), event.getOption("role", OptionMapping::getAsRole),
+                            event.getOption("videos", OptionMapping::getAsBoolean),
+                            event.getOption("shorts", OptionMapping::getAsBoolean),
+                            event.getOption("reset", "", OptionMapping::getAsString));
                     case "remove" -> remove(guild, platformOption(event), usernameOption(event));
                     case "list" -> list(guild);
-                    case "channel" -> channel(guild, event.getOption("channel", OptionMapping::getAsChannel).asGuildMessageChannel());
+                    case "channel" -> channel(guild, channelOption(event));
                     case "role" -> role(guild, event.getOption("role", OptionMapping::getAsRole));
-                    case "test" -> test(guild);
+                    case "test" -> test(guild, event.getOption("platform", OptionMapping::getAsString),
+                            event.getOption("username", OptionMapping::getAsString));
                     default -> "Unknown subcommand.";
                 };
                 hook.sendMessage(reply).queue();
@@ -113,7 +143,8 @@ public class CommandListener extends ListenerAdapter {
 
     @Override
     public void onCommandAutoCompleteInteraction(CommandAutoCompleteInteractionEvent event) {
-        if (!event.getName().equals("stream") || !"remove".equals(event.getSubcommandName()) || event.getGuild() == null) {
+        if (!event.getName().equals("stream") || !Set.of("remove", "edit", "test").contains(event.getSubcommandName())
+                || event.getGuild() == null) {
             return;
         }
         String typed = event.getFocusedOption().getValue().toLowerCase();
@@ -131,7 +162,15 @@ public class CommandListener extends ListenerAdapter {
         }
     }
 
-    private String add(Guild guild, Platform platform, String input, boolean videos, boolean shorts) throws Exception {
+    private String add(Guild guild, Platform platform, String input, boolean videos, boolean shorts,
+                       GuildMessageChannel postChannel, Role pingRole) throws Exception {
+        String problem = postChannel != null ? channelProblem(guild, postChannel) : null;
+        if (problem == null) {
+            problem = roleProblem(pingRole);
+        }
+        if (problem != null) {
+            return problem;
+        }
         StreamProvider provider = providers.get(platform);
         if (provider == null) {
             return platform.getDisplayName() + " is not configured on this bot (missing API credentials).";
@@ -142,15 +181,72 @@ public class CommandListener extends ListenerAdapter {
         }
         String name = channel.get().displayName();
         boolean youtube = platform == Platform.YOUTUBE;
-        if (!db.addStreamer(guild.getIdLong(), platform, channel.get(), !youtube || videos, !youtube || shorts)) {
-            return "**" + name + "** on " + platform.getDisplayName() + " is already tracked.";
+        if (!db.addStreamer(guild.getIdLong(), platform, channel.get(), !youtube || videos, !youtube || shorts,
+                postChannel != null ? postChannel.getIdLong() : null, pingRole != null ? pingRole.getIdLong() : null)) {
+            return "**" + name + "** on " + platform.getDisplayName() + " is already tracked. Use `/stream edit` to change it.";
         }
-        String reply = "Now tracking **" + name + "** on " + platform.getDisplayName()
-                + (youtube ? " (" + youtubeFeatures(videos, shorts) + ")" : "") + ".";
-        if (db.getSettings(guild.getIdLong()).channelId() == null) {
-            reply += "\nSet a notification channel with `/stream channel` so I know where to post.";
+        TrackedStreamer added = db.findStreamer(guild.getIdLong(), platform, channel.get().id()).orElseThrow();
+        return "Now tracking **" + name + "** on " + platform.getDisplayName()
+                + (youtube ? " (" + youtubeFeatures(videos, shorts) + ")" : "") + ".\n"
+                + routing(guild, added) + roleWarning(guild, pingRole);
+    }
+
+    private String edit(Guild guild, Platform platform, String nameOrId, GuildMessageChannel postChannel, Role pingRole,
+                        Boolean videos, Boolean shorts, String reset) throws Exception {
+        Optional<TrackedStreamer> streamer = db.findStreamer(guild.getIdLong(), platform, nameOrId);
+        if (streamer.isEmpty()) {
+            return "`" + nameOrId + "` on " + platform.getDisplayName() + " isn't tracked.";
         }
-        return reply;
+        boolean clearChannel = reset.equals("channel") || reset.equals("both");
+        boolean clearRole = reset.equals("role") || reset.equals("both");
+        String problem = postChannel != null && !clearChannel ? channelProblem(guild, postChannel) : null;
+        if (problem == null && !clearRole) {
+            problem = roleProblem(pingRole);
+        }
+        if (problem != null) {
+            return problem;
+        }
+        if (postChannel == null && pingRole == null && videos == null && shorts == null && reset.isEmpty()) {
+            return "Nothing to change. Pick a `channel`, `role`, `videos`, `shorts` or `reset` option.";
+        }
+        boolean youtube = platform == Platform.YOUTUBE;
+        db.updateStreamer(guild.getIdLong(), platform, streamer.get().username(),
+                postChannel != null ? postChannel.getIdLong() : null, pingRole != null ? pingRole.getIdLong() : null,
+                youtube ? videos : null, youtube ? shorts : null, clearChannel, clearRole);
+        TrackedStreamer updated = db.findStreamer(guild.getIdLong(), platform, streamer.get().username()).orElseThrow();
+        return "Updated **" + updated.name() + "** on " + platform.getDisplayName()
+                + (youtube ? " (" + youtubeFeatures(updated.notifyVideos(), updated.notifyShorts()) + ")" : "") + ".\n"
+                + routing(guild, updated) + (clearRole ? "" : roleWarning(guild, pingRole));
+    }
+
+    /**
+     * Describes where a streamer's posts go and who they ping, noting whether that's the server default.
+     */
+    private String routing(Guild guild, TrackedStreamer streamer) throws Exception {
+        GuildSettings settings = db.getSettings(guild.getIdLong());
+        Long channelId = PostTarget.effectiveChannelId(settings, streamer);
+        Long roleId = PostTarget.effectiveRoleId(settings, streamer);
+        if (channelId == null) {
+            return "⚠️ No channel to post in yet: set one with `/stream edit` or a server default with `/stream channel`.";
+        }
+        return "Posts go to <#" + channelId + ">" + (streamer.channelId() == null ? " (server default)" : "")
+                + (roleId == null ? " without a ping." : " and ping <@&" + roleId + ">" + (streamer.pingRoleId() == null ? " (server default)." : "."));
+    }
+
+    private static String channelProblem(Guild guild, GuildMessageChannel channel) {
+        return guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND, Permission.MESSAGE_EMBED_LINKS)
+                ? null
+                : "I need **View Channel**, **Send Messages** and **Embed Links** in " + channel.getAsMention() + ".";
+    }
+
+    private static String roleProblem(Role role) {
+        return role != null && role.isPublicRole() ? "Pinging @everyone isn't supported; pick a specific role." : null;
+    }
+
+    private static String roleWarning(Guild guild, Role role) {
+        return role != null && !role.isMentionable() && !guild.getSelfMember().hasPermission(Permission.MESSAGE_MENTION_EVERYONE)
+                ? "\n⚠️ " + role.getAsMention() + " isn't mentionable and I lack **Mention @everyone, @here, and All Roles**, so the ping won't notify anyone."
+                : "";
     }
 
     private String remove(Guild guild, Platform platform, String nameOrId) throws Exception {
@@ -175,20 +271,33 @@ public class CommandListener extends ListenerAdapter {
         List<TrackedStreamer> streamers = db.getStreamers(guild.getIdLong());
 
         StringBuilder sb = new StringBuilder();
-        sb.append("**Channel:** ").append(settings.channelId() == null ? "not set" : "<#" + settings.channelId() + ">").append('\n');
-        sb.append("**Ping role:** ").append(settings.pingRoleId() == null ? "none" : "<@&" + settings.pingRoleId() + ">").append("\n\n");
+        sb.append("**Default channel:** ").append(settings.channelId() == null ? "not set" : "<#" + settings.channelId() + ">").append('\n');
+        sb.append("**Default ping role:** ").append(settings.pingRoleId() == null ? "none" : "<@&" + settings.pingRoleId() + ">").append("\n\n");
         if (streamers.isEmpty()) {
             sb.append("No streamers tracked yet. Add one with `/stream add`.");
         } else {
             for (Platform platform : Platform.values()) {
-                List<String> names = streamers.stream()
-                        .filter(s -> s.platform() == platform)
-                        .map(s -> "[" + s.name() + "](<" + platform.channelUrl(s.username()) + ">)"
-                                + (platform == Platform.YOUTUBE && !(s.notifyVideos() && s.notifyShorts())
-                                ? " (" + youtubeFeatures(s.notifyVideos(), s.notifyShorts()) + ")" : ""))
-                        .toList();
-                if (!names.isEmpty()) {
-                    sb.append("**").append(platform.getDisplayName()).append(":** ").append(String.join(", ", names)).append('\n');
+                List<TrackedStreamer> onPlatform = streamers.stream().filter(s -> s.platform() == platform).toList();
+                if (onPlatform.isEmpty()) {
+                    continue;
+                }
+                sb.append("**").append(platform.getDisplayName()).append("**\n");
+                for (TrackedStreamer s : onPlatform) {
+                    sb.append("• [").append(s.name()).append("](<").append(platform.channelUrl(s.username())).append(">)");
+                    if (platform == Platform.YOUTUBE && !(s.notifyVideos() && s.notifyShorts())) {
+                        sb.append(" (").append(youtubeFeatures(s.notifyVideos(), s.notifyShorts())).append(")");
+                    }
+                    List<String> overrides = new ArrayList<>();
+                    if (s.channelId() != null) {
+                        overrides.add("<#" + s.channelId() + ">");
+                    }
+                    if (s.pingRoleId() != null) {
+                        overrides.add("<@&" + s.pingRoleId() + ">");
+                    }
+                    if (!overrides.isEmpty()) {
+                        sb.append(" → ").append(String.join(" · ", overrides));
+                    }
+                    sb.append('\n');
                 }
             }
         }
@@ -196,11 +305,12 @@ public class CommandListener extends ListenerAdapter {
     }
 
     private String channel(Guild guild, GuildMessageChannel channel) throws Exception {
-        if (!guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND, Permission.MESSAGE_EMBED_LINKS)) {
-            return "I need **View Channel**, **Send Messages** and **Embed Links** in " + channel.getAsMention() + ".";
+        String problem = channelProblem(guild, channel);
+        if (problem != null) {
+            return problem;
         }
         db.setChannel(guild.getIdLong(), channel.getIdLong());
-        return "Notifications will be posted in " + channel.getAsMention() + ".";
+        return "Streamers without their own channel will post in " + channel.getAsMention() + ".";
     }
 
     private String role(Guild guild, Role role) throws Exception {
@@ -208,33 +318,50 @@ public class CommandListener extends ListenerAdapter {
             db.setPingRole(guild.getIdLong(), null);
             return "Role pings disabled.";
         }
-        if (role.isPublicRole()) {
-            return "Pinging @everyone isn't supported; pick a specific role.";
+        String problem = roleProblem(role);
+        if (problem != null) {
+            return problem;
         }
         db.setPingRole(guild.getIdLong(), role.getIdLong());
-        String reply = "Notifications will ping " + role.getAsMention() + ".";
-        if (!role.isMentionable() && !guild.getSelfMember().hasPermission(Permission.MESSAGE_MENTION_EVERYONE)) {
-            reply += "\n⚠️ That role isn't mentionable and I lack **Mention @everyone, @here, and All Roles**, so the ping won't notify anyone.";
-        }
-        return reply;
+        return "Streamers without their own role will ping " + role.getAsMention() + "." + roleWarning(guild, role);
     }
 
-    private String test(Guild guild) throws Exception {
+    private String test(Guild guild, String platformName, String nameOrId) throws Exception {
         GuildSettings settings = db.getSettings(guild.getIdLong());
-        if (settings.channelId() == null) {
-            return "Set a notification channel first with `/stream channel`.";
+        TrackedStreamer streamer;
+        if (platformName != null && nameOrId != null) {
+            Optional<TrackedStreamer> found = db.findStreamer(guild.getIdLong(), Platform.fromString(platformName), nameOrId.trim());
+            if (found.isEmpty()) {
+                return "`" + nameOrId + "` on " + Platform.fromString(platformName).getDisplayName() + " isn't tracked.";
+            }
+            streamer = found.get();
+        } else if (platformName != null || nameOrId != null) {
+            return "Give both `platform` and `username` to test a specific streamer, or neither to test the server defaults.";
+        } else {
+            // No streamer: a stand-in with no overrides exercises the server defaults.
+            streamer = new TrackedStreamer(guild.getIdLong(), Platform.TWITCH, "test", null, true, true, null, null);
         }
-        GuildMessageChannel channel = guild.getChannelById(GuildMessageChannel.class, settings.channelId());
-        if (channel == null) {
-            return "The configured channel no longer exists. Set a new one with `/stream channel`.";
+        if (PostTarget.effectiveChannelId(settings, streamer) == null) {
+            return "There's no channel to post in. Set one with `/stream channel` or `/stream edit`.";
         }
-        String selfName = guild.getSelfMember().getEffectiveName();
+        PostTarget target = PostTarget.of(guild.getJDA(), settings, streamer);
+        if (target == null) {
+            return "I can't post in <#" + PostTarget.effectiveChannelId(settings, streamer)
+                    + ">. It may be deleted, or I'm missing **View Channel**, **Send Messages** or **Embed Links** there.";
+        }
+        GuildMessageChannel channel = target.channel();
+        String selfName = streamer.displayName() != null ? streamer.name() : guild.getSelfMember().getEffectiveName();
         StreamInfo sample = new StreamInfo(Platform.TWITCH, "twitch", selfName,
                 "This is a test notification", "Just Chatting", 1234,
                 TwitchProvider.PREVIEW_PLACEHOLDER, guild.getSelfMember().getEffectiveAvatarUrl(),
                 "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg", Instant.now(), null);
-        channel.sendMessage(EmbedFactory.liveMessage(sample, settings.pingRoleId(), List.of(sample.game()))).complete();
+        channel.sendMessage(EmbedFactory.liveMessage(sample, target.pingRoleId(), List.of(sample.game()))).complete();
         return "Sent a test notification to " + channel.getAsMention() + ".";
+    }
+
+    private static GuildMessageChannel channelOption(SlashCommandInteractionEvent event) {
+        OptionMapping option = event.getOption("channel");
+        return option == null ? null : option.getAsChannel().asGuildMessageChannel();
     }
 
     private static Platform platformOption(SlashCommandInteractionEvent event) {

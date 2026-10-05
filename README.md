@@ -36,14 +36,15 @@ If you leave out a platform's credentials, that platform is turned off.
 
 You need the **Manage Server** permission to use these commands.
 
-| Command                                     | Description                             |
-|---------------------------------------------|-----------------------------------------|
-| `/stream channel <channel>`                 | Choose where notifications are posted   |
-| `/stream role [role]`                       | Choose a role to ping, or leave empty to turn pings off |
-| `/stream add <platform> <channel> [videos] [shorts]` | Start tracking a streamer. YouTube takes an `@handle`, channel URL or channel ID, and also announces new videos and Shorts unless you set `videos:false` or `shorts:false` |
-| `/stream remove <platform> <channel>`       | Stop tracking a streamer                |
-| `/stream list`                              | Show tracked streamers and settings     |
-| `/stream test`                              | Post a sample notification              |
+| Command | Description |
+|---------|-------------|
+| `/stream add <platform> <username> [channel] [role] [videos] [shorts]` | Start tracking a streamer. `channel` and `role` set where this streamer posts and who it pings (otherwise the server defaults are used). YouTube takes an `@handle`, channel URL or channel ID, and also announces new videos and Shorts unless you set `videos:false` or `shorts:false` |
+| `/stream edit <platform> <username> [channel] [role] [videos] [shorts] [reset]` | Change a tracked streamer's channel, role or YouTube options. `reset` goes back to the server defaults |
+| `/stream remove <platform> <username>` | Stop tracking a streamer |
+| `/stream list` | Show tracked streamers, their channels and roles, and the server defaults |
+| `/stream channel <channel>` | Default channel for streamers without their own |
+| `/stream role [role]` | Default role to ping for streamers without their own, or leave empty to turn off default pings |
+| `/stream test [platform] [username]` | Post a sample notification, either for a specific streamer or using the server defaults |
 
 ### YouTube notes
 

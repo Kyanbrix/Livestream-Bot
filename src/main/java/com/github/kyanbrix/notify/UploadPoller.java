@@ -85,7 +85,7 @@ class UploadPoller {
                     continue;
                 }
                 try {
-                    PostTarget target = PostTarget.of(jda, db.getSettings(s.guildId()));
+                    PostTarget target = PostTarget.of(jda, db.getSettings(s.guildId()), s);
                     if (target == null) {
                         continue;
                     }

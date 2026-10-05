@@ -27,9 +27,11 @@ public class Database implements AutoCloseable {
      * @param username     stable channel identifier (Twitch/Kick login, YouTube channel ID)
      * @param notifyVideos YouTube only: announce new videos
      * @param notifyShorts YouTube only: announce new Shorts
+     * @param channelId    where this streamer's posts go, or null for the server's default channel
+     * @param pingRoleId   role this streamer's posts ping, or null for the server's default role
      */
     public record TrackedStreamer(long guildId, Platform platform, String username, String displayName,
-                                  boolean notifyVideos, boolean notifyShorts) {
+                                  boolean notifyVideos, boolean notifyShorts, Long channelId, Long pingRoleId) {
         public String name() {
             return displayName != null ? displayName : username;
         }
@@ -43,7 +45,7 @@ public class Database implements AutoCloseable {
     }
 
     private static final String SELECT_STREAMERS =
-            "SELECT guild_id, platform, username, display_name, notify_videos, notify_shorts FROM streamers ";
+            "SELECT guild_id, platform, username, display_name, notify_videos, notify_shorts, channel_id, ping_role_id FROM streamers ";
 
     private final Connection connection;
 
@@ -64,6 +66,8 @@ public class Database implements AutoCloseable {
                         display_name  TEXT,
                         notify_videos INTEGER NOT NULL DEFAULT 1,
                         notify_shorts INTEGER NOT NULL DEFAULT 1,
+                        channel_id    INTEGER,
+                        ping_role_id  INTEGER,
                         PRIMARY KEY (guild_id, platform, username)
                     )""");
             // YouTube videos already seen per channel, shared by all guilds, so only new uploads are announced.
@@ -96,6 +100,8 @@ public class Database implements AutoCloseable {
         addColumnIfMissing(st, "streamers", "display_name", "TEXT");
         addColumnIfMissing(st, "streamers", "notify_videos", "INTEGER NOT NULL DEFAULT 1");
         addColumnIfMissing(st, "streamers", "notify_shorts", "INTEGER NOT NULL DEFAULT 1");
+        addColumnIfMissing(st, "streamers", "channel_id", "INTEGER");
+        addColumnIfMissing(st, "streamers", "ping_role_id", "INTEGER");
     }
 
     private static void addColumnIfMissing(Statement st, String table, String column, String definition) throws SQLException {
@@ -149,18 +155,83 @@ public class Database implements AutoCloseable {
     /**
      * @return false if the streamer was already tracked in this guild
      */
-    public synchronized boolean addStreamer(long guildId, Platform platform, Channel channel,
-                                            boolean notifyVideos, boolean notifyShorts) throws SQLException {
+    /**
+     * @param channelId  notification channel for this streamer, or null to use the server default
+     * @param pingRoleId role to ping for this streamer, or null to use the server default
+     */
+    public synchronized boolean addStreamer(long guildId, Platform platform, Channel channel, boolean notifyVideos,
+                                            boolean notifyShorts, Long channelId, Long pingRoleId) throws SQLException {
         try (PreparedStatement ps = connection.prepareStatement("""
-                INSERT OR IGNORE INTO streamers (guild_id, platform, username, display_name, notify_videos, notify_shorts)
-                VALUES (?, ?, ?, ?, ?, ?)""")) {
+                INSERT OR IGNORE INTO streamers
+                    (guild_id, platform, username, display_name, notify_videos, notify_shorts, channel_id, ping_role_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""")) {
             ps.setLong(1, guildId);
             ps.setString(2, platform.name());
             ps.setString(3, channel.id());
             ps.setString(4, channel.displayName());
             ps.setBoolean(5, notifyVideos);
             ps.setBoolean(6, notifyShorts);
+            ps.setObject(7, channelId);
+            ps.setObject(8, pingRoleId);
             return ps.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * Changes a tracked streamer's settings. Null arguments leave that setting unchanged;
+     * {@code clearChannel}/{@code clearRole} reset it to the server default.
+     *
+     * @return false if the streamer isn't tracked in this guild
+     */
+    public synchronized boolean updateStreamer(long guildId, Platform platform, String username,
+                                               Long channelId, Long pingRoleId, Boolean notifyVideos, Boolean notifyShorts,
+                                               boolean clearChannel, boolean clearRole) throws SQLException {
+        List<String> sets = new ArrayList<>();
+        List<Object> values = new ArrayList<>();
+        if (clearChannel || channelId != null) {
+            sets.add("channel_id = ?");
+            values.add(clearChannel ? null : channelId);
+        }
+        if (clearRole || pingRoleId != null) {
+            sets.add("ping_role_id = ?");
+            values.add(clearRole ? null : pingRoleId);
+        }
+        if (notifyVideos != null) {
+            sets.add("notify_videos = ?");
+            values.add(notifyVideos);
+        }
+        if (notifyShorts != null) {
+            sets.add("notify_shorts = ?");
+            values.add(notifyShorts);
+        }
+        if (sets.isEmpty()) {
+            return findStreamer(guildId, platform, username).isPresent();
+        }
+        try (PreparedStatement ps = connection.prepareStatement("UPDATE streamers SET " + String.join(", ", sets)
+                + " WHERE guild_id = ? AND platform = ? AND username = ?")) {
+            int i = 1;
+            for (Object value : values) {
+                ps.setObject(i++, value);
+            }
+            ps.setLong(i++, guildId);
+            ps.setString(i++, platform.name());
+            ps.setString(i, username);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * Finds a tracked streamer by username/channel ID or display name, ignoring case.
+     */
+    public synchronized Optional<TrackedStreamer> findStreamer(long guildId, Platform platform, String nameOrId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(SELECT_STREAMERS + """
+                WHERE guild_id = ? AND platform = ?
+                  AND (username = ? COLLATE NOCASE OR display_name = ? COLLATE NOCASE)""")) {
+            ps.setLong(1, guildId);
+            ps.setString(2, platform.name());
+            ps.setString(3, nameOrId);
+            ps.setString(4, nameOrId);
+            return readStreamers(ps).stream().findFirst();
         }
     }
 
@@ -170,16 +241,7 @@ public class Database implements AutoCloseable {
      * @return the removed streamer, or empty if nothing matched
      */
     public synchronized Optional<TrackedStreamer> removeStreamer(long guildId, Platform platform, String nameOrId) throws SQLException {
-        Optional<TrackedStreamer> match;
-        try (PreparedStatement ps = connection.prepareStatement(SELECT_STREAMERS + """
-                WHERE guild_id = ? AND platform = ?
-                  AND (username = ? COLLATE NOCASE OR display_name = ? COLLATE NOCASE)""")) {
-            ps.setLong(1, guildId);
-            ps.setString(2, platform.name());
-            ps.setString(3, nameOrId);
-            ps.setString(4, nameOrId);
-            match = readStreamers(ps).stream().findFirst();
-        }
+        Optional<TrackedStreamer> match = findStreamer(guildId, platform, nameOrId);
         if (match.isEmpty()) {
             return match;
         }
@@ -213,7 +275,7 @@ public class Database implements AutoCloseable {
         try (ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 list.add(new TrackedStreamer(rs.getLong(1), Platform.valueOf(rs.getString(2)), rs.getString(3),
-                        rs.getString(4), rs.getBoolean(5), rs.getBoolean(6)));
+                        rs.getString(4), rs.getBoolean(5), rs.getBoolean(6), nullableLong(rs, 7), nullableLong(rs, 8)));
             }
         }
         return list;
