@@ -4,6 +4,7 @@ import com.github.kyanbrix.db.Database;
 import com.github.kyanbrix.db.Database.GuildSettings;
 import com.github.kyanbrix.db.Database.TrackedStreamer;
 import com.github.kyanbrix.notify.EmbedFactory;
+import com.github.kyanbrix.platform.Channel;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
 import com.github.kyanbrix.platform.StreamProvider;
@@ -30,16 +31,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.Optional;
 import java.util.concurrent.Executors;
-import java.util.regex.Pattern;
 
 public class CommandListener extends ListenerAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(CommandListener.class);
-    private static final Pattern USERNAME = Pattern.compile("[a-z0-9_-]{2,25}");
 
     private final Database db;
     private final Map<Platform, StreamProvider> providers;
@@ -54,15 +55,18 @@ public class CommandListener extends ListenerAdapter {
     public static SlashCommandData commandData() {
         OptionData platform = new OptionData(OptionType.STRING, "platform", "Streaming platform", true)
                 .addChoice("Twitch", "twitch")
-                .addChoice("Kick", "kick");
+                .addChoice("Kick", "kick")
+                .addChoice("YouTube", "youtube");
 
         return Commands.slash("stream", "Manage live stream notifications")
                 .setContexts(InteractionContextType.GUILD)
                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
                 .addSubcommands(
-                        new SubcommandData("add", "Notify when a streamer goes live")
+                        new SubcommandData("add", "Notify when a streamer goes live (YouTube: also new videos and Shorts)")
                                 .addOptions(platform,
-                                        new OptionData(OptionType.STRING, "username", "Channel name, e.g. shroud", true)),
+                                        new OptionData(OptionType.STRING, "username", "Channel name, @handle or channel URL", true),
+                                        new OptionData(OptionType.BOOLEAN, "videos", "YouTube: announce new videos (default: yes)", false),
+                                        new OptionData(OptionType.BOOLEAN, "shorts", "YouTube: announce new Shorts (default: yes)", false)),
                         new SubcommandData("remove", "Stop tracking a streamer")
                                 .addOptions(platform,
                                         new OptionData(OptionType.STRING, "username", "Tracked channel name", true, true)),
@@ -89,7 +93,9 @@ public class CommandListener extends ListenerAdapter {
         worker.submit(() -> {
             try {
                 String reply = switch (sub) {
-                    case "add" -> add(guild, platformOption(event), usernameOption(event));
+                    case "add" -> add(guild, platformOption(event), usernameOption(event),
+                            event.getOption("videos", true, OptionMapping::getAsBoolean),
+                            event.getOption("shorts", true, OptionMapping::getAsBoolean));
                     case "remove" -> remove(guild, platformOption(event), usernameOption(event));
                     case "list" -> list(guild);
                     case "channel" -> channel(guild, event.getOption("channel", OptionMapping::getAsChannel).asGuildMessageChannel());
@@ -115,11 +121,9 @@ public class CommandListener extends ListenerAdapter {
         try {
             List<Command.Choice> choices = db.getStreamers(event.getGuild().getIdLong()).stream()
                     .filter(s -> platform == null || s.platform().name().equalsIgnoreCase(platform))
-                    .map(TrackedStreamer::username)
-                    .filter(name -> name.startsWith(typed))
-                    .distinct()
+                    .filter(s -> s.name().toLowerCase().startsWith(typed) || s.username().toLowerCase().startsWith(typed))
                     .limit(25)
-                    .map(name -> new Command.Choice(name, name))
+                    .map(s -> new Command.Choice(s.name(), s.username()))
                     .toList();
             event.replyChoices(choices).queue();
         } catch (Exception e) {
@@ -127,31 +131,43 @@ public class CommandListener extends ListenerAdapter {
         }
     }
 
-    private String add(Guild guild, Platform platform, String username) throws Exception {
-        if (!USERNAME.matcher(username).matches()) {
-            return "`" + username + "` doesn't look like a valid " + platform.getDisplayName() + " username.";
-        }
+    private String add(Guild guild, Platform platform, String input, boolean videos, boolean shorts) throws Exception {
         StreamProvider provider = providers.get(platform);
         if (provider == null) {
             return platform.getDisplayName() + " is not configured on this bot (missing API credentials).";
         }
-        if (!provider.exists(username)) {
-            return "Couldn't find a " + platform.getDisplayName() + " channel named `" + username + "`.";
+        Optional<Channel> channel = provider.resolve(input);
+        if (channel.isEmpty()) {
+            return "Couldn't find a " + platform.getDisplayName() + " channel for `" + input + "`.";
         }
-        if (!db.addStreamer(guild.getIdLong(), platform, username)) {
-            return "`" + username + "` on " + platform.getDisplayName() + " is already tracked.";
+        String name = channel.get().displayName();
+        boolean youtube = platform == Platform.YOUTUBE;
+        if (!db.addStreamer(guild.getIdLong(), platform, channel.get(), !youtube || videos, !youtube || shorts)) {
+            return "**" + name + "** on " + platform.getDisplayName() + " is already tracked.";
         }
-        String reply = "Now tracking **" + username + "** on " + platform.getDisplayName() + ".";
+        String reply = "Now tracking **" + name + "** on " + platform.getDisplayName()
+                + (youtube ? " (" + youtubeFeatures(videos, shorts) + ")" : "") + ".";
         if (db.getSettings(guild.getIdLong()).channelId() == null) {
             reply += "\nSet a notification channel with `/stream channel` so I know where to post.";
         }
         return reply;
     }
 
-    private String remove(Guild guild, Platform platform, String username) throws Exception {
-        return db.removeStreamer(guild.getIdLong(), platform, username)
-                ? "Stopped tracking **" + username + "** on " + platform.getDisplayName() + "."
-                : "`" + username + "` on " + platform.getDisplayName() + " isn't tracked.";
+    private String remove(Guild guild, Platform platform, String nameOrId) throws Exception {
+        return db.removeStreamer(guild.getIdLong(), platform, nameOrId)
+                .map(s -> "Stopped tracking **" + s.name() + "** on " + platform.getDisplayName() + ".")
+                .orElse("`" + nameOrId + "` on " + platform.getDisplayName() + " isn't tracked.");
+    }
+
+    private static String youtubeFeatures(boolean videos, boolean shorts) {
+        List<String> features = new ArrayList<>(List.of("live"));
+        if (videos) {
+            features.add("videos");
+        }
+        if (shorts) {
+            features.add("Shorts");
+        }
+        return String.join(", ", features);
     }
 
     private String list(Guild guild) throws Exception {
@@ -167,7 +183,9 @@ public class CommandListener extends ListenerAdapter {
             for (Platform platform : Platform.values()) {
                 List<String> names = streamers.stream()
                         .filter(s -> s.platform() == platform)
-                        .map(s -> "[" + s.username() + "](<" + platform.channelUrl(s.username()) + ">)")
+                        .map(s -> "[" + s.name() + "](<" + platform.channelUrl(s.username()) + ">)"
+                                + (platform == Platform.YOUTUBE && !(s.notifyVideos() && s.notifyShorts())
+                                ? " (" + youtubeFeatures(s.notifyVideos(), s.notifyShorts()) + ")" : ""))
                         .toList();
                 if (!names.isEmpty()) {
                     sb.append("**").append(platform.getDisplayName()).append(":** ").append(String.join(", ", names)).append('\n');
@@ -214,7 +232,7 @@ public class CommandListener extends ListenerAdapter {
         StreamInfo sample = new StreamInfo(Platform.TWITCH, "twitch", selfName,
                 "This is a test notification", "Just Chatting", 1234,
                 TwitchProvider.PREVIEW_PLACEHOLDER, guild.getSelfMember().getEffectiveAvatarUrl(),
-                "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg", Instant.now());
+                "https://static-cdn.jtvnw.net/ttv-boxart/509658-285x380.jpg", Instant.now(), null);
         channel.sendMessage(EmbedFactory.liveMessage(sample, settings.pingRoleId(), List.of(sample.game()))).complete();
         return "Sent a test notification to " + channel.getAsMention() + ".";
     }
@@ -223,7 +241,10 @@ public class CommandListener extends ListenerAdapter {
         return Platform.fromString(event.getOption("platform", OptionMapping::getAsString));
     }
 
+    /**
+     * Raw input; each provider normalizes it (YouTube channel IDs are case-sensitive).
+     */
     private static String usernameOption(SlashCommandInteractionEvent event) {
-        return event.getOption("username", OptionMapping::getAsString).trim().toLowerCase().replaceFirst("^@", "");
+        return event.getOption("username", OptionMapping::getAsString).trim();
     }
 }

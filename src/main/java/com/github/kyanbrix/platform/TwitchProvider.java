@@ -77,7 +77,8 @@ public class TwitchProvider extends AppTokenClient implements StreamProvider {
                         thumbnail,
                         avatars.get(login),
                         boxArt.get(s.path("game_id").asText("")),
-                        parseInstant(s.path("started_at").asText(null))
+                        parseInstant(s.path("started_at").asText(null)),
+                        null
                 ));
             }
         }
@@ -103,8 +104,15 @@ public class TwitchProvider extends AppTokenClient implements StreamProvider {
     }
 
     @Override
-    public boolean exists(String username) throws IOException, InterruptedException {
-        return !getJson(API + "/users?login=" + encode(username)).path("data").isEmpty();
+    public Optional<Channel> resolve(String input) throws IOException, InterruptedException {
+        Optional<String> login = normalizeLogin(input);
+        if (login.isEmpty()) {
+            return Optional.empty();
+        }
+        JsonNode user = getJson(API + "/users?login=" + encode(login.get())).path("data").path(0);
+        return user.isMissingNode()
+                ? Optional.empty()
+                : Optional.of(new Channel(login.get(), user.path("display_name").asText(login.get())));
     }
 
     private Map<String, String> fetchBoxArt(List<String> gameIds) throws IOException, InterruptedException {

@@ -4,6 +4,8 @@ import java.time.Instant;
 
 /**
  * Snapshot of a live stream as reported by a platform.
+ *
+ * @param watchUrl link to the stream itself, or null to link the channel page
  */
 public record StreamInfo(
         Platform platform,
@@ -15,9 +17,13 @@ public record StreamInfo(
         String thumbnailUrl,
         String avatarUrl,
         String gameImageUrl,
-        Instant startedAt
+        Instant startedAt,
+        String watchUrl
 ) {
+    /**
+     * @return the stream's own page if the platform has one (YouTube), otherwise the channel page
+     */
     public String url() {
-        return platform.channelUrl(username);
+        return watchUrl != null ? watchUrl : platform.channelUrl(username);
     }
 }

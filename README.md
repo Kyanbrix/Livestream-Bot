@@ -1,12 +1,13 @@
 # LiveStreamBot
 
-A Discord bot that posts a notification when Twitch or Kick streamers go live. It updates the post while the stream runs and marks it as ended when the stream goes offline.
+A Discord bot that posts a notification when Twitch, Kick or YouTube streamers go live. It updates the post while the stream runs and marks it as ended when the stream goes offline. For YouTube channels it also announces new videos and Shorts.
 
 ## Setup
 
 1. **Discord**: create an application at https://discord.com/developers/applications, add a bot and copy its token. Invite it with the `bot` and `applications.commands` scopes and the **View Channel**, **Send Messages** and **Embed Links** permissions. To ping a role that isn't mentionable, the bot also needs **Mention @everyone, @here, and All Roles**.
 2. **Twitch**: register an app at https://dev.twitch.tv/console/apps (any OAuth redirect URL, e.g. `http://localhost`) and copy the Client ID and Secret.
 3. **Kick**: create an app at https://kick.com/settings/developer and copy the Client ID and Secret.
+4. **YouTube**: in the [Google Cloud Console](https://console.cloud.google.com/), create a project, enable **YouTube Data API v3**, then create an API key under *Credentials*. Restrict the key to the YouTube Data API v3. The free quota (10,000 units a day) is enough for dozens of channels, because the bot only uses 1-unit calls.
 
 ## Running
 
@@ -16,6 +17,7 @@ export TWITCH_CLIENT_ID=...
 export TWITCH_CLIENT_SECRET=...
 export KICK_CLIENT_ID=...
 export KICK_CLIENT_SECRET=...
+export YOUTUBE_API_KEY=...
 
 mvn package
 java -jar target/LiveStreamBot-1.0-SNAPSHOT.jar
@@ -38,10 +40,16 @@ You need the **Manage Server** permission to use these commands.
 |---------------------------------------------|-----------------------------------------|
 | `/stream channel <channel>`                 | Choose where notifications are posted   |
 | `/stream role [role]`                       | Choose a role to ping, or leave empty to turn pings off |
-| `/stream add <twitch\|kick> <username>`     | Start tracking a streamer               |
-| `/stream remove <twitch\|kick> <username>`  | Stop tracking a streamer                |
+| `/stream add <platform> <channel> [videos] [shorts]` | Start tracking a streamer. YouTube takes an `@handle`, channel URL or channel ID, and also announces new videos and Shorts unless you set `videos:false` or `shorts:false` |
+| `/stream remove <platform> <channel>`       | Stop tracking a streamer                |
 | `/stream list`                              | Show tracked streamers and settings     |
 | `/stream test`                              | Post a sample notification              |
+
+### YouTube notes
+
+- New videos and Shorts are detected from each channel's public feed. The first check records the channel's existing videos without announcing them, and only videos posted in the last 48 hours are ever announced.
+- A live stream is detected once it appears in the channel's feed. That's usually within a minute or two of starting, but YouTube sometimes delays the feed by a few minutes.
+- When a YouTube stream ends, the post's button links to the recording if the streamer kept it.
 
 ## Deploy (Docker on DigitalOcean)
 

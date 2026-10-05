@@ -12,8 +12,9 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests \
 # ---- jre: minimal Java runtime containing only the modules the bot uses ----
 FROM maven:3.10-eclipse-temurin-21-alpine AS jre
 COPY --from=build /bot.jar /bot.jar
-# jdk.crypto.ec: TLS ECDHE ciphers; jdk.unsupported: sun.misc.Unsafe (OkHttp, Kotlin, sqlite-jdbc)
-RUN MODULES="$(jdeps --ignore-missing-deps --multi-release 21 --print-module-deps /bot.jar),jdk.crypto.ec,jdk.unsupported" \
+# jdk.crypto.ec: TLS ECDHE ciphers; jdk.unsupported: sun.misc.Unsafe (OkHttp, Kotlin, sqlite-jdbc);
+# java.xml: YouTube feed parsing (currently also pulled in by java.desktop, listed so it never silently drops out)
+RUN MODULES="$(jdeps --ignore-missing-deps --multi-release 21 --print-module-deps /bot.jar),jdk.crypto.ec,jdk.unsupported,java.xml" \
     && echo "jlink modules: $MODULES" \
     && jlink --add-modules "$MODULES" \
         --strip-debug --no-man-pages --no-header-files \

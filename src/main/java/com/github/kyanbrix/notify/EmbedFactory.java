@@ -3,6 +3,7 @@ package com.github.kyanbrix.notify;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
 import com.github.kyanbrix.platform.Vod;
+import com.github.kyanbrix.platform.YouTubeVideo;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.components.actionrow.ActionRow;
 import net.dv8tion.jda.api.components.buttons.Button;
@@ -41,6 +42,37 @@ public final class EmbedFactory {
             builder.mentionRoles(pingRoleId);
         } else {
             builder.setContent("**" + stream.displayName() + "** is live on " + stream.platform().getDisplayName() + "!");
+        }
+        return builder.build();
+    }
+
+    /**
+     * Announces a new YouTube video or Short, pinging the role if set. Sent once, never edited.
+     */
+    public static MessageCreateData uploadMessage(YouTubeVideo video, String avatarUrl, Long pingRoleId) {
+        String kind = video.isShort() ? "Short" : "video";
+        String channel = video.channelTitle() != null ? video.channelTitle() : "A channel";
+        EmbedBuilder embed = new EmbedBuilder()
+                .setColor(Platform.YOUTUBE.getColor())
+                .setAuthor(channel, Platform.YOUTUBE.channelUrl(video.channelId()), avatarUrl)
+                .setTitle(truncate(video.title() != null ? video.title() : video.url(), MessageEmbed.TITLE_MAX_LENGTH), video.url())
+                .setImage(video.thumbnailUrl())
+                .setFooter(video.isShort() ? "YouTube Short" : "YouTube")
+                .setTimestamp(video.published());
+        if (video.published() != null) {
+            embed.setDescription("Posted " + TimeFormat.RELATIVE.format(video.published()));
+        }
+
+        MessageCreateBuilder builder = new MessageCreateBuilder()
+                .setEmbeds(embed.build())
+                .setComponents(ActionRow.of(Button.link(video.url(), "Watch " + kind)))
+                .setAllowedMentions(EnumSet.noneOf(Message.MentionType.class));
+        String text = "**" + channel + "** posted a new " + kind + "!";
+        if (pingRoleId != null) {
+            builder.setContent("<@&" + pingRoleId + "> " + text);
+            builder.mentionRoles(pingRoleId);
+        } else {
+            builder.setContent(text);
         }
         return builder.build();
     }
@@ -119,13 +151,15 @@ public final class EmbedFactory {
                 .setTitle(truncate(stream.title().isBlank() ? stream.url() : stream.title(), MessageEmbed.TITLE_MAX_LENGTH), stream.url())
                 // Rendered by Discord as e.g. "2 hours ago" and kept current client-side.
                 .setDescription(stream.startedAt() != null ? "🔴 Live since " + TimeFormat.RELATIVE.format(stream.startedAt()) : null)
-                .addField(stream.platform() == Platform.KICK ? "Category" : "Game",
-                        stream.game().isBlank() ? "—" : stream.game(), true)
-                .addField("Viewers", String.format("%,d", stream.viewers()), true)
                 .setImage(stream.thumbnailUrl())
                 .setThumbnail(stream.gameImageUrl())
                 .setFooter(stream.platform().getDisplayName())
                 .setTimestamp(stream.startedAt());
+        // YouTube has no game/category for streams, so the field is left out rather than showing "—".
+        if (!stream.game().isBlank()) {
+            embed.addField(stream.platform() == Platform.KICK ? "Category" : "Game", stream.game(), true);
+        }
+        embed.addField("Viewers", String.format("%,d", stream.viewers()), true);
         if (games.size() > 1) {
             embed.addField("Previously", gameHistory(games.subList(0, games.size() - 1)), false);
         }

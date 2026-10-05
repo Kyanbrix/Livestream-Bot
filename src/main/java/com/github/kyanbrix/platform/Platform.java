@@ -4,7 +4,8 @@ import java.awt.Color;
 
 public enum Platform {
     TWITCH("Twitch", new Color(0x9146FF), "https://twitch.tv/"),
-    KICK("Kick", new Color(0x53FC18), "https://kick.com/");
+    KICK("Kick", new Color(0x53FC18), "https://kick.com/"),
+    YOUTUBE("YouTube", new Color(0xFF0000), "https://www.youtube.com/channel/");
 
     private final String displayName;
     private final Color color;

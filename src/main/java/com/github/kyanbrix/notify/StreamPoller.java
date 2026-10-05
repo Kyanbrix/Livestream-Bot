@@ -8,8 +8,8 @@ import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamInfo;
 import com.github.kyanbrix.platform.StreamProvider;
 import com.github.kyanbrix.platform.Vod;
+import com.github.kyanbrix.platform.YouTubeProvider;
 import net.dv8tion.jda.api.JDA;
-import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
@@ -54,10 +54,15 @@ public class StreamPoller implements AutoCloseable {
         return t;
     });
 
+    private final UploadPoller uploadPoller;
+
     public StreamPoller(JDA jda, Database db, Map<Platform, StreamProvider> providers) {
         this.jda = jda;
         this.db = db;
         this.providers = providers;
+        this.uploadPoller = providers.get(Platform.YOUTUBE) instanceof YouTubeProvider youtube
+                ? new UploadPoller(jda, db, youtube)
+                : null;
     }
 
     public void start(long intervalSeconds) {
@@ -113,6 +118,10 @@ public class StreamPoller implements AutoCloseable {
                 log.warn("Failed to update {} {} in guild {}: {}", s.platform(), s.username(), s.guildId(), e.getMessage());
             }
         }
+
+        if (uploadPoller != null) {
+            uploadPoller.poll(tracked);
+        }
     }
 
     private void process(TrackedStreamer s, GuildSettings settings, StreamInfo stream) throws Exception {
@@ -141,28 +150,15 @@ public class StreamPoller implements AutoCloseable {
     }
 
     private void announce(long guildId, GuildSettings settings, StreamInfo stream) throws Exception {
-        if (settings.channelId() == null) {
+        PostTarget target = PostTarget.of(jda, settings);
+        if (target == null) {
             return;
         }
-        GuildMessageChannel channel = channel(guildId, settings.channelId());
-        if (channel == null) {
-            log.debug("Notification channel {} for guild {} is unavailable", settings.channelId(), guildId);
-            return;
-        }
-        Guild guild = channel.getGuild();
-        if (!guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND, Permission.MESSAGE_EMBED_LINKS)) {
-            log.warn("Missing permissions to post in #{} ({})", channel.getName(), guild.getName());
-            return;
-        }
-
-        Long pingRole = settings.pingRoleId() != null && guild.getRoleById(settings.pingRoleId()) != null
-                ? settings.pingRoleId()
-                : null;
         List<String> games = stream.game().isBlank() ? List.of() : List.of(stream.game());
-        Message message = channel.sendMessage(EmbedFactory.liveMessage(stream, pingRole, games)).complete();
+        Message message = target.channel().sendMessage(EmbedFactory.liveMessage(stream, target.pingRoleId(), games)).complete();
         db.saveLiveState(new LiveState(guildId, stream.platform(), stream.username(),
-                channel.getIdLong(), message.getIdLong(), stream.startedAt(), games));
-        log.info("Announced {} {} in {}", stream.platform(), stream.username(), guild.getName());
+                target.channel().getIdLong(), message.getIdLong(), stream.startedAt(), games));
+        log.info("Announced {} {} in {}", stream.platform(), stream.username(), target.channel().getGuild().getName());
     }
 
     private void refresh(LiveState state, StreamInfo stream) throws Exception {

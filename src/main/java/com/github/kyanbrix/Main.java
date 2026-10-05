@@ -7,6 +7,7 @@ import com.github.kyanbrix.platform.KickProvider;
 import com.github.kyanbrix.platform.Platform;
 import com.github.kyanbrix.platform.StreamProvider;
 import com.github.kyanbrix.platform.TwitchProvider;
+import com.github.kyanbrix.platform.YouTubeProvider;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Activity;
@@ -44,6 +45,13 @@ public class Main {
             providers.put(Platform.KICK, new KickProvider(kickId, kickSecret));
         } else {
             log.warn("KICK_CLIENT_ID / KICK_CLIENT_SECRET not set; Kick notifications are disabled.");
+        }
+
+        String youtubeKey = env("YOUTUBE_API_KEY");
+        if (youtubeKey != null) {
+            providers.put(Platform.YOUTUBE, new YouTubeProvider(youtubeKey));
+        } else {
+            log.warn("YOUTUBE_API_KEY not set; YouTube notifications are disabled.");
         }
 
         Database db = new Database(envOr("DB_PATH", "livestreambot.db"));

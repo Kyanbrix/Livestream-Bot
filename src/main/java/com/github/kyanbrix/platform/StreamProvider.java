@@ -24,9 +24,11 @@ public interface StreamProvider {
     Map<String, StreamInfo> fetchLive(Collection<String> usernames) throws IOException, InterruptedException;
 
     /**
-     * @return true if a channel with this username/slug exists on the platform
+     * Turns user input (a name, handle or channel URL) into the channel to track.
+     *
+     * @return empty if the input isn't valid or no such channel exists
      */
-    boolean exists(String username) throws IOException, InterruptedException;
+    Optional<Channel> resolve(String input) throws IOException, InterruptedException;
 
     /**
      * Looks up the recording of a stream that started at {@code startedAt}.

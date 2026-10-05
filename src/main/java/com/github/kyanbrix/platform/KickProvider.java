@@ -74,7 +74,8 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
                         thumbnail,
                         user != null ? user.path("profile_picture").asText(null) : null,
                         categoryImage,
-                        parseInstant(stream.path("start_time").asText(null))
+                        parseInstant(stream.path("start_time").asText(null)),
+                        null
                 ));
             }
         }
@@ -106,12 +107,12 @@ public class KickProvider extends AppTokenClient implements StreamProvider {
     }
 
     @Override
-    public boolean exists(String username) throws IOException, InterruptedException {
-        return !getJson(API + "/channels?slug=" + encode(username)).path("data").isEmpty();
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
+    public Optional<Channel> resolve(String input) throws IOException, InterruptedException {
+        Optional<String> slug = normalizeLogin(input);
+        if (slug.isEmpty() || getJson(API + "/channels?slug=" + encode(slug.get())).path("data").isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new Channel(slug.get(), slug.get()));
     }
 
     private Map<String, JsonNode> fetchUsers(List<String> userIds) throws IOException, InterruptedException {
