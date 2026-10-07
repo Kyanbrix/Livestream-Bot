@@ -12,7 +12,6 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -84,6 +83,7 @@ public class Database implements AutoCloseable {
                     CREATE TABLE IF NOT EXISTS youtube_seen (
                         channel_id TEXT NOT NULL,
                         video_id   TEXT NOT NULL,
+                        seen_at    INTEGER,
                         PRIMARY KEY (channel_id, video_id)
                     )""");
             st.execute("""
@@ -111,6 +111,9 @@ public class Database implements AutoCloseable {
         addColumnIfMissing(st, "streamers", "notify_shorts", "INTEGER NOT NULL DEFAULT 1");
         addColumnIfMissing(st, "streamers", "channel_id", "INTEGER");
         addColumnIfMissing(st, "streamers", "ping_role_id", "INTEGER");
+        addColumnIfMissing(st, "youtube_seen", "seen_at", "INTEGER");
+        // Rows from before seen_at existed count as seen now, so pruning doesn't drop recent videos.
+        st.execute("UPDATE youtube_seen SET seen_at = strftime('%s', 'now') WHERE seen_at IS NULL");
     }
 
     private static void addColumnIfMissing(Statement st, String table, String column, String definition) throws SQLException {
@@ -374,10 +377,12 @@ public class Database implements AutoCloseable {
     public synchronized void markSeen(String channelId, Collection<String> videoIds) throws SQLException {
         List<String> ids = new ArrayList<>(videoIds);
         ids.add(SEEDED);
-        try (PreparedStatement ps = connection.prepareStatement("INSERT OR IGNORE INTO youtube_seen (channel_id, video_id) VALUES (?, ?)")) {
+        try (PreparedStatement ps = connection.prepareStatement("INSERT OR IGNORE INTO youtube_seen (channel_id, video_id, seen_at) VALUES (?, ?, ?)")) {
+            long now = Instant.now().getEpochSecond();
             for (String id : ids) {
                 ps.setString(1, channelId);
                 ps.setString(2, id);
+                ps.setLong(3, now);
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -385,29 +390,15 @@ public class Database implements AutoCloseable {
     }
 
     /**
-     * Forgets videos that are no longer in the channel's feed; they can't reappear as "new" anyway.
+     * Forgets videos first seen before {@code before}. Pruning by feed membership instead would re-announce videos,
+     * because YouTube's feed caches disagree and a new upload can briefly drop out of the feed and come back.
+     * A video seen before the cutoff was published before it too, so it's too old to be announced again.
      */
-    public synchronized void pruneSeen(String channelId, Collection<String> keepIds) throws SQLException {
-        Set<String> keep = new HashSet<>(keepIds);
-        keep.add(SEEDED);
-        List<String> stale = new ArrayList<>();
-        try (PreparedStatement ps = connection.prepareStatement("SELECT video_id FROM youtube_seen WHERE channel_id = ?")) {
-            ps.setString(1, channelId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    if (!keep.contains(rs.getString(1))) {
-                        stale.add(rs.getString(1));
-                    }
-                }
-            }
-        }
-        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM youtube_seen WHERE channel_id = ? AND video_id = ?")) {
-            for (String id : stale) {
-                ps.setString(1, channelId);
-                ps.setString(2, id);
-                ps.addBatch();
-            }
-            ps.executeBatch();
+    public synchronized void pruneSeen(Instant before) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("DELETE FROM youtube_seen WHERE seen_at < ? AND video_id <> ?")) {
+            ps.setLong(1, before.getEpochSecond());
+            ps.setString(2, SEEDED);
+            ps.executeUpdate();
         }
     }
 

@@ -26,6 +26,8 @@ class UploadPoller {
 
     /** Older entries are never announced, e.g. an old video made public or a feed reshuffle. */
     private static final Duration MAX_AGE = Duration.ofHours(48);
+    /** How long seen video IDs are kept. Must be longer than {@link #MAX_AGE}. */
+    private static final Duration SEEN_RETENTION = Duration.ofDays(7);
 
     private final JDA jda;
     private final Database db;
@@ -47,6 +49,11 @@ class UploadPoller {
             } catch (Exception e) {
                 log.warn("Failed to check YouTube uploads for {}: {}", entry.getKey(), e.getMessage());
             }
+        }
+        try {
+            db.pruneSeen(Instant.now().minus(SEEN_RETENTION));
+        } catch (Exception e) {
+            log.warn("Failed to prune seen YouTube videos: {}", e.getMessage());
         }
     }
 
@@ -73,7 +80,6 @@ class UploadPoller {
 
         // Mark first: a failed post is better than posting the same video every tick.
         db.markSeen(channelId, unseen);
-        db.pruneSeen(channelId, feedIds);
 
         if (uploads.isEmpty()) {
             return;
