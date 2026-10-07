@@ -12,6 +12,7 @@ import com.github.kyanbrix.platform.StreamProvider;
 import com.github.kyanbrix.platform.TwitchProvider;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
@@ -141,12 +142,46 @@ public class CommandListener extends ListenerAdapter {
                             event.getOption("username", OptionMapping::getAsString));
                     default -> "Unknown subcommand.";
                 };
-                hook.sendMessage(reply).queue();
+                send(hook, reply);
             } catch (Exception e) {
                 log.error("/stream {} failed in {}", sub, guild.getName(), e);
-                hook.sendMessage("Something went wrong: " + e.getMessage()).queue();
+                String message = String.valueOf(e.getMessage());
+                send(hook, "Something went wrong: " + (message.length() > 300 ? message.substring(0, 300) + "…" : message));
             }
         });
+    }
+
+    /**
+     * Sends a reply, split into several messages at line breaks if it's over Discord's length limit.
+     */
+    private static void send(InteractionHook hook, String text) {
+        List<String> chunks = new ArrayList<>();
+        StringBuilder chunk = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            while (line.length() > Message.MAX_CONTENT_LENGTH) { // a single line too long to fit anywhere
+                flush(chunks, chunk);
+                chunks.add(line.substring(0, Message.MAX_CONTENT_LENGTH));
+                line = line.substring(Message.MAX_CONTENT_LENGTH);
+            }
+            if (chunk.length() + 1 + line.length() > Message.MAX_CONTENT_LENGTH) {
+                flush(chunks, chunk);
+            }
+            if (!chunk.isEmpty()) {
+                chunk.append('\n');
+            }
+            chunk.append(line);
+        }
+        flush(chunks, chunk);
+        for (String c : chunks) {
+            hook.sendMessage(c).setEphemeral(true).queue(); // follow-ups too, like the deferred reply
+        }
+    }
+
+    private static void flush(List<String> chunks, StringBuilder chunk) {
+        if (!chunk.toString().isBlank()) {
+            chunks.add(chunk.toString());
+        }
+        chunk.setLength(0);
     }
 
     @Override
