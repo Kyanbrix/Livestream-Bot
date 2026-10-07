@@ -54,7 +54,7 @@ You need the **Manage Server** permission to use these commands.
 
 ## Deploy (Docker on DigitalOcean)
 
-The image is built on the droplet. It uses a trimmed Java runtime with only the modules the bot needs, on Alpine. The container is limited to 256 MB of RAM, runs as a non-root user with a read-only filesystem, and restarts automatically if it crashes.
+GitHub Actions (`.github/workflows/docker.yml`) builds the image on every push to `main` and publishes it to `ghcr.io/kyanbrix/livestream-bot`, so the droplet only pulls it. The image uses a trimmed Java runtime with only the modules the bot needs, on Alpine. The container is limited to 256 MB of RAM, runs as a non-root user with a read-only filesystem, and restarts automatically if it crashes.
 
 1. **Create a droplet**: Ubuntu, 1 GB RAM. Install Docker:
    ```bash
@@ -62,23 +62,26 @@ The image is built on the droplet. It uses a trimmed Java runtime with only the 
    ```
    (Or pick the "Docker" image from the DigitalOcean Marketplace.)
 
-2. **Optional: add swap** so the first Maven build has extra memory to fall back on:
+2. **Copy the compose file and config template** to the droplet. The source code isn't needed there:
    ```bash
-   fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-   echo '/swapfile none swap sw 0 0' >> /etc/fstab
+   ssh root@YOUR_DROPLET_IP mkdir -p /opt/livestreambot
+   scp docker-compose.yml .env.example root@YOUR_DROPLET_IP:/opt/livestreambot/
    ```
+   (Or `git clone https://github.com/Kyanbrix/Livestream-Bot.git /opt/livestreambot`.)
 
-3. **Copy the project** to the droplet, either with `git clone <your-repo> /opt/livestreambot` or from your machine:
-   ```bash
-   rsync -av --exclude target --exclude .idea --exclude .git ./ root@YOUR_DROPLET_IP:/opt/livestreambot
-   ```
-
-4. **Configure and start**:
+3. **Configure and start**:
    ```bash
    cd /opt/livestreambot
    cp .env.example .env && nano .env   # fill in your tokens
-   docker compose up -d --build
+   docker compose pull
+   docker compose up -d
    ```
+
+To build on the droplet instead of pulling, copy the whole project and run `docker compose up -d --build`. Add 1 GB of swap first so the Maven build doesn't run out of memory:
+```bash
+fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
 
 ### Operating
 
@@ -87,9 +90,9 @@ The image is built on the droplet. It uses a trimmed Java runtime with only the 
 | Follow logs       | `docker compose logs -f`                                         |
 | Memory / CPU      | `docker stats livestreambot`                                     |
 | Restart           | `docker compose restart`                                         |
-| Update            | `git pull` (or rsync again), then `docker compose up -d --build` |
+| Update            | `docker compose pull && docker compose up -d`                    |
 | Back up database  | `docker compose cp bot:/data/livestreambot.db ./backup.db`       |
-| Free disk space   | `docker image prune -f && docker builder prune -f`               |
+| Free disk space   | `docker image prune -f`                                          |
 
 Settings and live-stream state are kept in the `bot-data` Docker volume, so rebuilding or updating doesn't lose them. Don't run `docker compose down -v` unless you want to wipe them.
 

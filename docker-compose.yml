@@ -1,7 +1,9 @@
 services:
   bot:
+    # Published by .github/workflows/docker.yml; `docker compose pull` fetches it.
+    # `docker compose up -d --build` still builds it locally from the Dockerfile instead.
+    image: ghcr.io/kyanbrix/livestream-bot:latest
     build: .
-    image: livestreambot:latest
     container_name: livestreambot
     restart: unless-stopped
     env_file: .env
